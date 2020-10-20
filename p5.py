@@ -120,13 +120,33 @@ def getIDX(Hfinal,r,c):
 	cp = ptp[1] / ptp[2]
 	return (int(rp) ,int(cp))
 
+#https://stackoverflow.com/questions/35180764/opencv-python-image-too-big-to-display
+def ResizeWithAspectRatio(image, width=None, height=None, inter=cv2.INTER_AREA):
+    dim = None
+    (h, w) = image.shape[:2]
+
+    if width is None and height is None:
+        return image
+    if width is None:
+        r = height / float(h)
+        dim = (int(w * r), height)
+    else:
+        r = width / float(w)
+        dim = (width, int(h * r))
+
+    return cv2.resize(image, dim, interpolation=inter)
 
 if __name__ == '__main__':
-	wall1 = cv2.imread('wall1.png',0)
-	wall2 = cv2.imread('wall2.png',0)
+	# wall1 = cv2.imread('wall1.png',0)
+	# wall2 = cv2.imread('wall2.png',0)
+
+	wall1 = cv2.imread('1.jpg', 0)
+	wall2 = cv2.imread('2.jpg', 0)
+	wall1 = ResizeWithAspectRatio(wall1, width=720)
+	wall2 = ResizeWithAspectRatio(wall2, width=720)
 
 	# inspired by https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_feature2d/py_orb/py_orb.html
-	orb = cv2.ORB_create(nlevels=30,nfeatures=10000)
+	orb = cv2.ORB_create(nlevels=40,nfeatures=10000)
 
 	kp1 = orb.detect(wall1, None)
 	kp1, des1 = orb.compute(wall1, kp1)
@@ -187,9 +207,9 @@ if __name__ == '__main__':
 	M = np.array(M)
 	xypVect = np.array(xypVect)
 
-	numIter = 500
+	numIter = 15000
 	sampSize = 4
-	topPercent = 2.5
+	topPercent = 5
 	Hfinal = ransac(numIter,M,xypVect,matches,topPercent,sampSize)
 	print()
 
@@ -204,16 +224,19 @@ if __name__ == '__main__':
 
 	shp = wall1.shape
 	wall1towall2pointMap = {}
-	#wall2towall1pointMap = {}
+	wall2towall1pointMap = {}
 
 	maxY = -99999999
 	minY = 9999999999
 	maxX = -9999999999
 	minX = 99999999999
-	for r in range(shp[0]):
-		for c in range(shp[1]):
+	for r in range(shp[0]*2):
+		r = r/2
+		for c in range(shp[1]*2):
+			c= c/2
 			X , Y = getIDX(Hfinal, c, r)
 			wall1towall2pointMap[(c,r)]= (X, Y)
+			wall2towall1pointMap[(X,Y)] = (int(c),int(r))
 			if maxY < Y:
 				maxY = Y
 			if maxX < X:
@@ -244,20 +267,46 @@ if __name__ == '__main__':
 	#out = np.zeros((maxc+shiftcol,maxr+shiftrow))
 	out[shiftrow:wall2.shape[0]+shiftrow,shiftcol:wall2.shape[1]+shiftcol] = wall2 #just copy in values from wall 2 to start with
 
-	for point in wall1towall2pointMap:
-		x = point[0]
-		y = point[1]
+	last = (0-shiftcol,0-shiftrow)
+	for y in range(out.shape[0]):
+		for x in range(out.shape[1]):
+			#rcp = None
+			if (x-shiftcol,y-shiftrow) in wall2towall1pointMap:
+				# if rcp in wall1towall2pointMap:
+				# 	rcp = wall1towall2pointMap[(x,y)]
+				# else:
+				# 	rcp = last
+				# last = rcp
+				rcp = wall2towall1pointMap[(x-shiftcol,y-shiftrow)]
+				Xp = rcp[0] #+ shiftcol
+				Yp = rcp[1] # + shiftrow
+				if out[y,x] != 0:
+					out[y,x] = np.mean([out[y,x], wall1[Yp, Xp]])
+					#pass
+				else:
+					out[y,x] = wall1[Yp,Xp]
 
-		rcp = wall1towall2pointMap[(x, y)]
-		Xp = rcp[0] + shiftcol
-		Yp = rcp[1] + shiftrow
-
-		if out[Yp, Xp] !=0 :
-			out[Yp, Xp] = np.mean([out[Yp, Xp], wall1[y, x]])
-		else:
-			out[Yp, Xp] = wall1[y, x]
+	# for point in wall1towall2pointMap:
+	# 	x = point[0]
+	# 	y = point[1]
+	#
+	# 	rcp = wall1towall2pointMap[(x, y)]
+	# 	Xp = rcp[0] + shiftcol
+	# 	Yp = rcp[1] + shiftrow
+	#
+	# 	if out[Yp, Xp] !=0 :
+	# 		out[Yp, Xp] = np.mean([out[Yp, Xp], wall1[y, x]])
+	# 	else:
+	# 		out[Yp, Xp] = wall1[y, x]
 
 	out = out.astype(dtype)
+
+	kernal = np.array([[1,2,1],[2,4,2],[1,2,1]])
+	kernal = kernal/np.sum(kernal)
+
+	dst = cv2.filter2D(out, -1, kernal)
+	#dst = dst.astype()
+
 	cv2.imshow('mosiac', out)
 	cv2.waitKey(0)
 
