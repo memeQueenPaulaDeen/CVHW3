@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import cv2
 from matplotlib import pyplot as plt
@@ -78,17 +80,68 @@ def doTheThing(imageShape,numsplits):
 
 	return splitDict
 
-def supress(matches,kp1,imShape,keepPercent, numsplits = 4):
 
-	splitDict = doTheThing(imShape,numsplits)
+def checkRange(shape,x,y):
+	xmin = 0
+	ymin = 0
+	xmax = shape[1]
+	ymax = shape[0]
+	return xmin < x and x < xmax and ymin < y and y < ymax
+
+def addEntropy(kp1,kp2,imShape1,imsShape2,edict,match):
+	xy = kp1[match.queryIdx].pt
+	xyp = kp2[match.trainIdx].pt
+
+	x = xy[0]
+	y = xy[1]
+	xp = xyp[0]
+	yp = xyp[1]
+
+	key = None
+	for k in edict.keys():
+		if k[0][0] <= y and y < k[1][0] and k[0][1] <= x and x < k[1][1]:
+			key = k
+			break
+
+	if key == None:
+		return
+
+	e = edict[key]
+	deltax = random.randint(max([ -e**2,int(-imShape1[1])]), min([3 * e**2,int(imShape1[1])]))
+	x = x + deltax
+	deltay = random.randint(max([-e**2,int(-imShape1[0])]), min([3 * e**2,int(imShape1[0])]))
+	y = y + deltay
+
+	xp = xp + deltax
+	yp = yp + deltay
+
+	if checkRange(imShape1,x,y) and checkRange(imsShape2,xp,yp):
+		xy = (x,y)
+		xyp = (xp,yp)
+
+		kp1[match.queryIdx].pt = xy
+		kp2[match.trainIdx].pt = xyp
+
+
+
+
+def supress(matches,kp1,kp2,imShape1,imsShape2,keepPercent, numsplits = 4):
+
+	splitDict = doTheThing(imShape1,numsplits)
+	entropyDict =  {}
 
 	for match in matches:
+
+		#addEntropy(kp1,kp2,imShape1,imsShape2,entropyDict,match)
+
 		xy = kp1[match.queryIdx].pt
 		x = xy[0]
 		y = xy[1]
+
 		for k in splitDict.keys():
 			if k[0][0] <= y and y < k[1][0] and k[0][1] <= x and x < k[1][1]:
 				splitDict[k].append(match)
+				entropyDict[k] = len(splitDict[k])
 
 
 	mostKpInSector = 9999999999
@@ -226,13 +279,13 @@ def ResizeWithAspectRatio(image, width=None, height=None, inter=cv2.INTER_AREA):
     return cv2.resize(image, dim, interpolation=inter)
 
 if __name__ == '__main__':
-	# wall1 = cv2.imread('wall1.png',0)
-	# wall2 = cv2.imread('wall2.png',0)
+	wall1 = cv2.imread('wall1.png',0)
+	wall2 = cv2.imread('wall2.png',0)
 
-	wall1 = cv2.imread('1.jpg',0)
-	wall2 = cv2.imread('2.jpg',0)
-	wall1 = ResizeWithAspectRatio(wall1, width=720)
-	wall2 = ResizeWithAspectRatio(wall2, width=720)
+	# wall1 = cv2.imread('1.jpg',0)
+	# wall2 = cv2.imread('2.jpg',0)
+	# wall1 = ResizeWithAspectRatio(wall1, width=720)
+	# wall2 = ResizeWithAspectRatio(wall2, width=720)
 
 	# inspired by https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_feature2d/py_orb/py_orb.html
 	fnum = 400000
@@ -257,12 +310,12 @@ if __name__ == '__main__':
 	matches = bf.match(des1, des2)
 
 
-	#drop bottom 10 percent as pre process
+	#drop bottom n percent as pre process
 	matches = sorted(matches, key=lambda x: x.distance)
-	matches = matches[:int(len(matches) * (90 / 100))]
+	matches = matches[:int(len(matches) * (80 / 100))]
 
-	topPercent = 60
-	matches = supress(matches,kp1,wall1.shape,topPercent,numsplits=3)
+	topPercent = 80
+	matches = supress(matches,kp1,kp2,wall1.shape,wall2.shape,topPercent,numsplits=3)
 
 	matchImg = cv2.drawMatches(wall1, kp1, wall2, kp2, matches,np.array([[]]), flags=2)
 	#plt.imshow(matchImg),plt.show()
