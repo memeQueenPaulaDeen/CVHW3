@@ -59,12 +59,92 @@ def homography(mapping):
 
 	return np.linalg.inv(x) @ p
 
+def doTheThing(imageShape,numsplits):
+	rows = imageShape[0]
+	cols = imageShape[1]
 
-def ransac(numIter,Mat,xyprime,matches,keepPercent,sampSize):
+	rsidx = [int((x+1)*rows/numsplits) for x in range(numsplits)]
+	csidx = [int((x+1)*cols/numsplits) for x in range(numsplits)]
+
+	splitDict = {}
+
+	rlast = 0
+	clast = 0
+	for r in rsidx:
+		for c in csidx:
+			splitDict[((rlast,clast),(r,c))] = []
+			clast = c
+		rlast = r
+
+	return splitDict
+
+def supress(matches,kp1,imShape,keepPercent, numsplits = 4):
+
+	splitDict = doTheThing(imShape,numsplits)
+
+	for match in matches:
+		xy = kp1[match.queryIdx].pt
+		x = xy[0]
+		y = xy[1]
+		for k in splitDict.keys():
+			if k[0][0] <= y and y < k[1][0] and k[0][1] <= x and x < k[1][1]:
+				splitDict[k].append(match)
+
+
+	mostKpInSector = 9999999999
+	rmkeys = []
+	for k in splitDict.keys():
+		if len(splitDict[k]) != 0:
+			splitDict[k] = sorted(splitDict[k], key=lambda x: x.distance)
+			splitDict[k] = splitDict[k][:int(len(splitDict[k]) * (keepPercent / 100))]
+			numpts = len(splitDict[k])
+			if numpts < mostKpInSector:
+				mostKpInSector = numpts
+		else:
+			rmkeys.append(k)
+
+	for k in rmkeys:
+		splitDict.pop(k)
+
+	print('mostKp in sector ' + str(mostKpInSector))
+
+	supressedMatches = []
+	for k in splitDict.keys():
+		supressedMatches.append(splitDict[k][:mostKpInSector-1])
+
+	supressedMatches = np.array(supressedMatches).flatten()
+	return supressedMatches.tolist()
+
+
+
+
+
+def ransac(numIter,matches,sampSize):
 
 	mseHdict = {}
-	matches = sorted(matches, key=lambda x: x.distance)
-	matches = matches[:int(len(matches)*(keepPercent/100))]
+	inlierdict = {}
+
+	xyprime = []
+	Mat =[]
+	for match in matches:
+		xy = kp1[match.queryIdx].pt
+		xyp = kp2[match.trainIdx].pt
+
+		x = xy[0]
+		y = xy[1]
+		xp = xyp[0]
+		yp = xyp[1]
+
+		xyprime.append(xp)
+		xyprime.append(yp)
+		Mat.append([x, y, 1, 0, 0, 0, -xp * x, -xp * y])
+		Mat.append([0, 0, 0, x, y, 1, -yp * x, -yp * y])
+
+		#print(str(kp1[match.queryIdx].pt) + " : " + str(kp2[match.trainIdx].pt))
+
+
+	Mat = np.array(Mat)
+	xyprime = np.array(xyprime)
 
 	for iter in range(numIter):
 
@@ -87,6 +167,7 @@ def ransac(numIter,Mat,xyprime,matches,keepPercent,sampSize):
 		              [a[6], a[7], 1]])
 
 		error = []
+		inlier = 0
 		for match in matches:
 			pt = kp1[match.queryIdx].pt
 			x = pt[0]
@@ -101,17 +182,25 @@ def ransac(numIter,Mat,xyprime,matches,keepPercent,sampSize):
 			ypPredicted = ptpPredicted[1] / ptpPredicted[2]
 			error.append(xp - xpPredicted)
 			error.append(yp - ypPredicted)
+
+			if np.linalg.norm([xp-xpPredicted,yp-ypPredicted]) < 2:
+				inlier = inlier+1
+
 		error = np.array(error)
 		mse = error @ error / len(error)
 		mseHdict[mse] = H
+		inlierdict[inlier] = H
 
+	best =  max(inlierdict.keys())
+	print(best)
+	return inlierdict[best]
 
-	best = min(mseHdict.keys())
-	#print(collections.OrderedDict(sorted(mseHdict.items())))
-	print('min:' + str(best))
-	print('max:' + str(max(mseHdict.keys())))
-	print('avg' + str(np.mean(list(mseHdict.keys()))))
-	return mseHdict[best]
+	# best = min(mseHdict.keys())
+	# #print(collections.OrderedDict(sorted(mseHdict.items())))
+	# print('min:' + str(best))
+	# print('max:' + str(max(mseHdict.keys())))
+	# print('avg' + str(np.mean(list(mseHdict.keys()))))
+	# return mseHdict[best]
 
 
 def getIDX(Hfinal,r,c):
@@ -140,13 +229,14 @@ if __name__ == '__main__':
 	# wall1 = cv2.imread('wall1.png',0)
 	# wall2 = cv2.imread('wall2.png',0)
 
-	wall1 = cv2.imread('1.jpg', 0)
-	wall2 = cv2.imread('2.jpg', 0)
+	wall1 = cv2.imread('1.jpg',0)
+	wall2 = cv2.imread('2.jpg',0)
 	wall1 = ResizeWithAspectRatio(wall1, width=720)
 	wall2 = ResizeWithAspectRatio(wall2, width=720)
 
 	# inspired by https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_feature2d/py_orb/py_orb.html
-	orb = cv2.ORB_create(nlevels=40,nfeatures=10000)
+	fnum = 400000
+	orb = cv2.ORB_create(nlevels=40,nfeatures=fnum)
 
 	kp1 = orb.detect(wall1, None)
 	kp1, des1 = orb.compute(wall1, kp1)
@@ -165,8 +255,16 @@ if __name__ == '__main__':
 	#taken from https://opencv-python-tutroals.readthedocs.io/en/latest/py_tutorials/py_feature2d/py_matcher/py_matcher.html
 	bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 	matches = bf.match(des1, des2)
+
+
+	#drop bottom 10 percent as pre process
 	matches = sorted(matches, key=lambda x: x.distance)
-	matchImg = cv2.drawMatches(wall1, kp1, wall2, kp2, matches[:10],np.array([[]]), flags=2)
+	matches = matches[:int(len(matches) * (90 / 100))]
+
+	topPercent = 60
+	matches = supress(matches,kp1,wall1.shape,topPercent,numsplits=3)
+
+	matchImg = cv2.drawMatches(wall1, kp1, wall2, kp2, matches,np.array([[]]), flags=2)
 	#plt.imshow(matchImg),plt.show()
 
 	cv2.imshow('matched key points', matchImg)
@@ -177,40 +275,11 @@ if __name__ == '__main__':
 		print(str(kp1[match.queryIdx].pt) + " : " + str(kp2[match.trainIdx].pt))
 
 
-	pdDict = {}
-	M = []
-	xypVect = []
-	df = pd.DataFrame()
-	for match in matches:
-		xy = kp1[match.queryIdx].pt
-		xyp = kp2[match.trainIdx].pt
 
-		x = xy[0]
-		y = xy[1]
-		xp = xyp[0]
-		yp = xyp[1]
-
-		pdDict['x'] = [x]
-		pdDict['y'] = [y]
-		pdDict['xp'] = [xp]
-		pdDict['yp'] = [yp]
-
-		xypVect.append(xp)
-		xypVect.append(yp)
-		M.append([x, y, 1, 0, 0, 0, -xp * x, -xp * y])
-		M.append([0, 0, 0, x, y, 1, -yp * x, -yp * y])
-
-		#print(str(kp1[match.queryIdx].pt) + " : " + str(kp2[match.trainIdx].pt))
-
-		df = df.append(pd.DataFrame.from_dict(pdDict))
-
-	M = np.array(M)
-	xypVect = np.array(xypVect)
-
-	numIter = 15000
-	sampSize = 4
-	topPercent = 5
-	Hfinal = ransac(numIter,M,xypVect,matches,topPercent,sampSize)
+	numIter = 3000
+	sampSize = 8#int(fnum *(topPercent/100) / (numIter - 1))
+	print('sammpSize ' + str(sampSize))
+	Hfinal = ransac(numIter,matches,sampSize)
 	print()
 
 	for match in matches[:10]:
